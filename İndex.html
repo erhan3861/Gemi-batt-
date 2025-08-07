@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Gemi Batması Animasyonu</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      background: linear-gradient(#a7d8ff 80%, #1771c6 100%);
+      overflow: hidden;
+      height: 100vh;
+    }
+    #scene {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%,-50%);
+      width: 900px; height: 600px;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .water {
+      position: absolute;
+      left: 0; bottom: 0;
+      width: 100%; height: 38%;
+      background: linear-gradient(180deg, #4cb8e6 50%, #2274b2 100%);
+      border-radius: 0 0 80px 80px/0 0 100px 100px;
+      box-shadow: 0 20px 60px #2274b2bb;
+      z-index: 0;
+    }
+    .top-canvas {
+      position: absolute;
+      left: 0; top: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div class="water"></div>
+  <svg id="scene" width="900" height="600">
+    <!-- Gemi (başlangıçta görünür, sonra animasyonla batacak) -->
+    <g id="ship" style="transition:transform 2s cubic-bezier(.3,1.3,.7,1);">
+      <!-- Gövde -->
+      <ellipse cx="450" cy="330" rx="110" ry="38" fill="#af5a29" stroke="#79351d" stroke-width="5"/>
+      <!-- Gölge -->
+      <ellipse cx="450" cy="346" rx="95" ry="13" fill="#a46b3b" opacity="0.25"/>
+      <!-- Kaplama -->
+      <ellipse cx="450" cy="320" rx="100" ry="30" fill="#d99e61" stroke="#8c5123" stroke-width="3"/>
+      <!-- Direk -->
+      <rect x="442" y="180" width="16" height="90" rx="5" fill="#b0ada5"/>
+      <!-- Yelken -->
+      <polygon points="450,195 450,270 520,255" fill="white" stroke="#bbb" stroke-width="2"/>
+      <polygon points="450,195 450,270 380,255" fill="#f3f5fa" stroke="#bbb" stroke-width="2"/>
+      <!-- Bayrak -->
+      <rect x="448" y="170" width="22" height="12" rx="2" fill="#c82333" stroke="#fff" stroke-width="1"/>
+      <rect x="448" y="182" width="22" height="2" fill="#333" />
+      <!-- Kabin -->
+      <rect x="420" y="255" width="60" height="30" rx="10" fill="#4d6782" stroke="#21303d" stroke-width="3"/>
+      <!-- Pencere -->
+      <ellipse cx="440" cy="270" rx="6" ry="8" fill="#b1e4f2" stroke="#fff" stroke-width="1.5"/>
+      <ellipse cx="460" cy="270" rx="6" ry="8" fill="#b1e4f2" stroke="#fff" stroke-width="1.5"/>
+      <!-- Köpük -->
+      <ellipse cx="370" cy="370" rx="15" ry="5" fill="#fff" opacity="0.5"/>
+      <ellipse cx="530" cy="370" rx="12" ry="5" fill="#fff" opacity="0.4"/>
+    </g>
+    <!-- Top (gizli) -->
+    <circle id="ball" cx="-100" cy="-100" r="14" fill="#303030" stroke="#fff" stroke-width="2" style="filter:drop-shadow(0 2px 6px #222);"/>
+    <!-- Patlama efekti SVG grubu -->
+    <g id="explosion"></g>
+  </svg>
+  <canvas class="top-canvas" id="bubbleCanvas"></canvas>
+  <script>
+    // Kendi boyutlarımız
+    const svg = document.getElementById('scene');
+    const ship = document.getElementById('ship');
+    const ball = document.getElementById('ball');
+    const explosion = document.getElementById('explosion');
+    const bubbleCanvas = document.getElementById('bubbleCanvas');
+    bubbleCanvas.width = 900; bubbleCanvas.height = 600;
+    const bctx = bubbleCanvas.getContext('2d');
+    // Gemi orta pozisyonu
+    const shipCenter = { x: 450, y: 330 };
+    // Top animasyonu değişkenleri
+    let ballState = 'ready'; // 'flying', 'hit', 'hidden'
+    let ballPos = { x: -100, y: -100 };
+    let ballVel = { x: 0, y: 0 };
+    // Patlama ve batma kontrolü
+    let explosionParticles = [];
+    let isSinking = false;
+    let sinkStartTime = 0;
+    // Mouse click olayı
+    svg.addEventListener('mousedown', e => {
+      if (ballState !== 'ready' || isSinking) return;
+      // SVG içindeki tıklama konumu:
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX - svg.getBoundingClientRect().left;
+      pt.y = e.clientY - svg.getBoundingClientRect().top;
+      // Topu mouse pozisyonundan gemiye doğru fırlat
+      ballPos = { x: pt.x, y: pt.y };
+      // Hedef: geminin gövdesinin üst noktası
+      const dx = shipCenter.x - pt.x, dy = shipCenter.y - pt.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      // Topun hızını ayarla (animasyon hızı)
+      ballVel = { x: dx / len * 11, y: dy / len * 11 };
+      ball.setAttribute('cx', ballPos.x);
+      ball.setAttribute('cy', ballPos.y);
+      ballState = 'flying';
+      ball.style.visibility = 'visible';
+      explosion.innerHTML = '';
+    });
+    // Top ve animasyon döngüsü
+    function animate() {
+      // Top hareketi
+      if (ballState === 'flying') {
+        ballPos.x += ballVel.x;
+        ballPos.y += ballVel.y;
+        ball.setAttribute('cx', ballPos.x);
+        ball.setAttribute('cy', ballPos.y);
+        // Gemiye çarpma kontrolü (yaklaşık elips çarpışması)
+        const dx = ballPos.x - shipCenter.x;
+        const dy = ballPos.y - shipCenter.y;
+        const inEllipse = (dx * dx) / (105 * 105) + (dy * dy) / (37 * 37) <= 1.1;
+        if (inEllipse) {
+          // Patlama başlat
+          ballState = 'hit';
+          ball.style.visibility = 'hidden';
+          createExplosion(shipCenter.x, shipCenter.y - 12);
+          setTimeout(() => startSinking(), 700);
+        }
+        // Ekran dışına çıkarsa iptal
+        if (ballPos.x < 0 || ballPos.x > 900 || ballPos.y < 0 || ballPos.y > 600) {
+          ballState = 'ready';
+          ball.style.visibility = 'hidden';
+        }
+      }
+      // Patlama partikülleri
+      if (explosionParticles.length > 0) {
+        explosion.innerHTML = '';
+        for (const p of explosionParticles) {
+          p.x += Math.cos(p.angle) * p.speed;
+          p.y += Math.sin(p.angle) * p.speed;
+          p.radius *= 0.95;
+          p.opacity *= 0.92;
+          if (p.radius > 0.8 && p.opacity > 0.02) {
+            explosion.innerHTML +=
+              `<circle cx="${p.x}" cy="${p.y}" r="${p.radius}" fill="${p.color}" opacity="${p.opacity}"/>`;
+          }
+        }
+        explosionParticles = explosionParticles.filter(p => p.radius > 0.8 && p.opacity > 0.02);
+      }
+      // Gemi batma animasyonu
+      if (isSinking) {
+        const t = Math.min((performance.now() - sinkStartTime) / 1900, 1.0);
+        // Batarken yavaş yavaş suya gömülme ve döndürme
+        ship.style.transform =
+          `translateY(${t * 80}px) rotate(-12deg) scale(${1 - t * 0.17})`;
+        // Köpük animasyonu
+        drawBubbles(shipCenter.x, 358 + t * 60, Math.floor(20 * t));
+        if (t === 1) isSinking = false;
+      }
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    // Patlama partikül efekti
+    function createExplosion(x, y) {
+      explosionParticles = [];
+      for (let i = 0; i < 28; ++i) {
+        explosionParticles.push({
+          x: x + Math.cos(i) * 12,
+          y: y + Math.sin(i) * 8,
+          angle: (i / 28) * 2 * Math.PI + (Math.random() - .5) * 0.35,
+          speed: 4.5 + Math.random() * 2,
+          radius: 8 + Math.random() * 7,
+          opacity: 1,
+          color: i % 4 == 0 ? '#fff19b' : (i % 2 === 0 ? '#d5373e' : '#ffc870')
+        });
+      }
+    }
+
+    // Gemi batma animasyonu başlatıcı
+    function startSinking() {
+      isSinking = true;
+      sinkStartTime = performance.now();
+      setTimeout(() => {
+        // Gemi tamamen battıktan sonra sahneden kaybolsun
+        ship.style.opacity = 0;
+        drawBubbles(shipCenter.x, 420, 32, true);
+        setTimeout(resetScene, 1700);
+      }, 2000);
+    }
+
+    // Köpük/bubble efektleri (canvas ile)
+    function drawBubbles(cx, cy, count, big) {
+      bctx.clearRect(0,0,900,600);
+      for (let i=0;i<count;i++){
+        const angle = Math.random()*2*Math.PI;
+        const rad = big? 12+Math.random()*26: 8+Math.random()*13;
+        const bx = cx + Math.cos(angle)*rad*1.1 + (Math.random()-0.5)*14;
+        const by = cy + Math.sin(angle)*rad*0.4 + Math.random()*6;
+        bctx.beginPath();
+        bctx.arc(bx,by,big?7+Math.random()*6:3+Math.random()*4,0,2*Math.PI);
+        bctx.fillStyle='rgba(255,255,255,'+(big?0.14:0.22)+')';
+        bctx.fill();
+      }
+      setTimeout(()=>bctx.clearRect(0,0,900,600), big?1200:700);
+    }
+
+    // Reset (her şey başa dönsün)
+    function resetScene() {
+      ship.style.transform = '';
+      ship.style.opacity = 1;
+      explosion.innerHTML = '';
+      ballState = 'ready';
+      isSinking = false;
+    }
+  </script>
+</body>
+</html>
